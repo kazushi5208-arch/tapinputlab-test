@@ -1,0 +1,76 @@
+name: TapInputLab Android APK - build and check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Fetch source files
+        uses: actions/checkout@v4
+
+      - name: Validate package and extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "0917a24c071d05d4363c1ac00f8a94708fadd4851f54d87eabaf895c1271a311  TapInputLab_project.zip" | sha256sum -c -
+          mkdir -p project
+          unzip -q TapInputLab_project.zip -d project
+          test -f project/app/src/main/AndroidManifest.xml
+          test -f project/tests/run_all_checks.sh
+          chmod +x project/tests/*.sh
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.7'
+          cache-provider: basic
+
+      - name: Run local regression tests, compile APK, run Android Lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd project
+          bash tests/run_all_checks.sh
+          gradle --no-daemon --stacktrace :app:assembleDebug :app:lintDebug
+
+      - name: Verify APK archive, signature, and app ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=project/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK" | grep -F "package: name='com.example.tapinputlab'"
+          sha256sum "$APK" | tee apk-sha256.txt
+
+      - name: Publish APK for Xperia download (not zipped)
+        uses: actions/upload-artifact@v7
+        with:
+          path: project/app/build/outputs/apk/debug/app-debug.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
